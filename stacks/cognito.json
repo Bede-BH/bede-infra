@@ -1,0 +1,129 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Bede API identity - Cognito user pool for machine-to-machine API access. Deployed in the bede-identity account, once per environment. App clients are declared in this template so that the list of who has API access is reviewable in git; adding a consumer is a pull request and a stack update, not a console action.",
+  "Parameters": {
+    "Environment": {
+      "Type": "String",
+      "AllowedValues": [
+        "dev",
+        "uat",
+        "prod"
+      ],
+      "Description": "One pool per environment. A dev token has a different issuer and is rejected by the uat and prod authorizers."
+    },
+    "CognitoDomainPrefix": {
+      "Type": "String",
+      "Description": "Globally unique prefix for the hosted token endpoint, e.g. bede-api-dev"
+    },
+    "AccessTokenValidityMinutes": {
+      "Type": "Number",
+      "Default": 60,
+      "Description": "Access token lifetime. Cognito permits up to 24 hours; 60 minutes is the agreed value."
+    }
+  },
+  "Resources": {
+    "UserPool": {
+      "Type": "AWS::Cognito::UserPool",
+      "Properties": {
+        "UserPoolName": {
+          "Fn::Sub": "bede-api-${Environment}"
+        },
+        "AdminCreateUserConfig": {
+          "AllowAdminCreateUserOnly": true
+        }
+      }
+    },
+    "UserPoolDomain": {
+      "Type": "AWS::Cognito::UserPoolDomain",
+      "Properties": {
+        "Domain": {
+          "Ref": "CognitoDomainPrefix"
+        },
+        "UserPoolId": {
+          "Ref": "UserPool"
+        }
+      }
+    },
+    "AccountsResourceServer": {
+      "Type": "AWS::Cognito::UserPoolResourceServer",
+      "Properties": {
+        "UserPoolId": {
+          "Ref": "UserPool"
+        },
+        "Identifier": "accounts",
+        "Name": "accounts",
+        "Scopes": [
+          {
+            "ScopeName": "read",
+            "ScopeDescription": "Read account transaction history"
+          }
+        ]
+      }
+    },
+    "ConsumerBusinessReporting": {
+      "Type": "AWS::Cognito::UserPoolClient",
+      "DependsOn": "AccountsResourceServer",
+      "Properties": {
+        "UserPoolId": {
+          "Ref": "UserPool"
+        },
+        "ClientName": {
+          "Fn::Sub": "business-reporting-${Environment}"
+        },
+        "GenerateSecret": true,
+        "AllowedOAuthFlows": [
+          "client_credentials"
+        ],
+        "AllowedOAuthFlowsUserPoolClient": true,
+        "AllowedOAuthScopes": [
+          "accounts/read"
+        ],
+        "SupportedIdentityProviders": [
+          "COGNITO"
+        ],
+        "AccessTokenValidity": {
+          "Ref": "AccessTokenValidityMinutes"
+        },
+        "TokenValidityUnits": {
+          "AccessToken": "minutes"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "UserPoolId": {
+      "Description": "Pass to the API Gateway stack",
+      "Value": {
+        "Ref": "UserPool"
+      }
+    },
+    "JwtIssuerUrl": {
+      "Description": "Pass to the API Gateway stack as JwtIssuerUrl",
+      "Value": {
+        "Fn::Sub": "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
+      }
+    },
+    "CognitoTokenUrl": {
+      "Description": "Pass to the Lambda stack as CognitoTokenUrl",
+      "Value": {
+        "Fn::Sub": "https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com/oauth2/token"
+      }
+    },
+    "TokenScope": {
+      "Description": "Pass to the Lambda stack as TokenScope",
+      "Value": "accounts/read"
+    },
+    "BusinessReportingClientId": {
+      "Description": "Give this to the consumer, with its secret",
+      "Value": {
+        "Ref": "ConsumerBusinessReporting"
+      }
+    },
+    "GetBusinessReportingSecret": {
+      "Description": "Cognito never exposes a client secret in outputs",
+      "Value": {
+        "Fn::Sub": "aws cognito-idp describe-user-pool-client --user-pool-id ${UserPool} --client-id ${ConsumerBusinessReporting} --query UserPoolClient.ClientSecret --output text"
+      }
+    }
+  }
+}

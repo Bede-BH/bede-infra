@@ -1,0 +1,235 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Bede API gateway - routes /auth/generate-token and /account/transaction-history. Deployed in each application account (dev, uat, prod).",
+  "Parameters": {
+    "Environment": {
+      "Type": "String",
+      "AllowedValues": [
+        "dev",
+        "uat",
+        "prod"
+      ]
+    },
+    "GenerateTokenFunctionArn": {
+      "Type": "String",
+      "Description": "From the Lambda stack outputs"
+    },
+    "TransactionHistoryFunctionArn": {
+      "Type": "String",
+      "Description": "From the Lambda stack outputs"
+    },
+    "JwtIssuerUrl": {
+      "Type": "String",
+      "Description": "From the Cognito stack outputs, in the bede-identity account"
+    },
+    "RequiredScope": {
+      "Type": "String",
+      "Default": "accounts/read"
+    },
+    "ThrottleRateLimit": {
+      "Type": "Number",
+      "Default": 20,
+      "Description": "Steady-state requests per second, all routes"
+    },
+    "ThrottleBurstLimit": {
+      "Type": "Number",
+      "Default": 40
+    },
+    "TokenRouteRateLimit": {
+      "Type": "Number",
+      "Default": 2,
+      "Description": "The token route is unauthenticated, so it is throttled harder than the rest"
+    },
+    "TokenRouteBurstLimit": {
+      "Type": "Number",
+      "Default": 5
+    },
+    "LogRetentionDays": {
+      "Type": "Number",
+      "Default": 90
+    }
+  },
+  "Resources": {
+    "ApiLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/apigateway/bede-api-${Environment}"
+        },
+        "RetentionInDays": {
+          "Ref": "LogRetentionDays"
+        }
+      }
+    },
+    "HttpApi": {
+      "Type": "AWS::ApiGatewayV2::Api",
+      "Properties": {
+        "Name": {
+          "Fn::Sub": "bede-api-${Environment}"
+        },
+        "ProtocolType": "HTTP",
+        "Description": "Bede partner API"
+      }
+    },
+    "JwtAuthorizer": {
+      "Type": "AWS::ApiGatewayV2::Authorizer",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "AuthorizerType": "JWT",
+        "Name": "cognito-jwt",
+        "IdentitySource": [
+          "$request.header.Authorization"
+        ],
+        "JwtConfiguration": {
+          "Issuer": {
+            "Ref": "JwtIssuerUrl"
+          }
+        }
+      }
+    },
+    "GenerateTokenIntegration": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "IntegrationType": "AWS_PROXY",
+        "IntegrationUri": {
+          "Ref": "GenerateTokenFunctionArn"
+        },
+        "PayloadFormatVersion": "2.0",
+        "TimeoutInMillis": 15000
+      }
+    },
+    "GenerateTokenRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "RouteKey": "POST /auth/generate-token",
+        "AuthorizationType": "NONE",
+        "Target": {
+          "Fn::Sub": "integrations/${GenerateTokenIntegration}"
+        }
+      }
+    },
+    "TransactionHistoryIntegration": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "IntegrationType": "AWS_PROXY",
+        "IntegrationUri": {
+          "Ref": "TransactionHistoryFunctionArn"
+        },
+        "PayloadFormatVersion": "2.0",
+        "TimeoutInMillis": 29000
+      }
+    },
+    "TransactionHistoryRoute": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "RouteKey": "POST /account/transaction-history",
+        "AuthorizationType": "JWT",
+        "AuthorizerId": {
+          "Ref": "JwtAuthorizer"
+        },
+        "AuthorizationScopes": [
+          {
+            "Ref": "RequiredScope"
+          }
+        ],
+        "Target": {
+          "Fn::Sub": "integrations/${TransactionHistoryIntegration}"
+        }
+      }
+    },
+    "Stage": {
+      "Type": "AWS::ApiGatewayV2::Stage",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "StageName": "$default",
+        "AutoDeploy": true,
+        "DefaultRouteSettings": {
+          "ThrottlingRateLimit": {
+            "Ref": "ThrottleRateLimit"
+          },
+          "ThrottlingBurstLimit": {
+            "Ref": "ThrottleBurstLimit"
+          }
+        },
+        "RouteSettings": {
+          "POST /auth/generate-token": {
+            "ThrottlingRateLimit": {
+              "Ref": "TokenRouteRateLimit"
+            },
+            "ThrottlingBurstLimit": {
+              "Ref": "TokenRouteBurstLimit"
+            }
+          }
+        },
+        "AccessLogSettings": {
+          "DestinationArn": {
+            "Fn::GetAtt": [
+              "ApiLogGroup",
+              "Arn"
+            ]
+          },
+          "Format": "{\"requestId\": \"$context.requestId\", \"ip\": \"$context.identity.sourceIp\", \"requestTime\": \"$context.requestTime\", \"routeKey\": \"$context.routeKey\", \"status\": \"$context.status\", \"clientId\": \"$context.authorizer.claims.client_id\", \"integrationError\": \"$context.integrationErrorMessage\"}"
+        }
+      }
+    },
+    "GenerateTokenPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "GenerateTokenFunctionArn"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*/auth/generate-token"
+        }
+      }
+    },
+    "TransactionHistoryPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "TransactionHistoryFunctionArn"
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*/account/transaction-history"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "ApiBaseUrl": {
+      "Value": {
+        "Fn::Sub": "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+      }
+    },
+    "GenerateTokenUrl": {
+      "Value": {
+        "Fn::Sub": "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/auth/generate-token"
+      }
+    },
+    "TransactionHistoryUrl": {
+      "Value": {
+        "Fn::Sub": "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/account/transaction-history"
+      }
+    }
+  }
+}

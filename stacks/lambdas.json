@@ -1,0 +1,285 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Bede API lambdas - generate-token and transaction-history. Deployed in each application account (dev, uat, prod).",
+  "Parameters": {
+    "Environment": {
+      "Type": "String",
+      "AllowedValues": [
+        "dev",
+        "uat",
+        "prod"
+      ]
+    },
+    "CodeBucket": {
+      "Type": "String",
+      "Description": "Cross-account S3 artifacts bucket in the tools account. Must be in the same region as this stack."
+    },
+    "GenerateTokenApplicationName": {
+      "Type": "String",
+      "Default": "bede-auth-generate-token-api"
+    },
+    "GenerateTokenVersion": {
+      "Type": "String",
+      "Default": "v1.0",
+      "Description": "Bump on every code change - CloudFormation only redeploys when the S3 key changes."
+    },
+    "TransactionHistoryApplicationName": {
+      "Type": "String",
+      "Default": "bede-accounts-transaction-history-api"
+    },
+    "TransactionHistoryVersion": {
+      "Type": "String",
+      "Default": "v1.0"
+    },
+    "CognitoTokenUrl": {
+      "Type": "String",
+      "Description": "Cognito hosted token endpoint, from the Cognito stack outputs"
+    },
+    "TokenScope": {
+      "Type": "String",
+      "Default": "accounts/read"
+    },
+    "CompanyCr": {
+      "Type": "String",
+      "Default": "151347-1",
+      "Description": "Fixed here, never supplied by callers"
+    },
+    "TokenEndpointUrl": {
+      "Type": "String",
+      "Description": "KFH token generation endpoint"
+    },
+    "HistoryEndpointUrl": {
+      "Type": "String",
+      "Description": "KFH base URL up to and including /clients, no trailing slash"
+    },
+    "TokenEmail": {
+      "Type": "String"
+    },
+    "TokenPasswordSecretName": {
+      "Type": "String",
+      "Description": "Existing Secrets Manager secret holding the KFH API password as plaintext"
+    },
+    "SkipTlsVerification": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "false",
+        "true"
+      ],
+      "Description": "TEMPORARY DIAGNOSTIC ONLY. Must be false in production."
+    },
+    "LambdaSubnetIds": {
+      "Type": "List<AWS::EC2::Subnet::Id>",
+      "Description": "Subnets with connectivity to the KFH hosts AND to Secrets Manager. Used by transaction-history only; generate-token needs no VPC."
+    },
+    "LambdaSecurityGroupIds": {
+      "Type": "List<AWS::EC2::SecurityGroup::Id>"
+    },
+    "LogRetentionDays": {
+      "Type": "Number",
+      "Default": 90
+    }
+  },
+  "Resources": {
+    "GenerateTokenRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": {
+          "Fn::Sub": "bede-generate-token-${Environment}-role"
+        },
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        ]
+      }
+    },
+    "GenerateTokenFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "bede-generate-token-${Environment}"
+        },
+        "Runtime": "python3.12",
+        "Handler": "index.lambda_handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "GenerateTokenRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 15,
+        "MemorySize": 256,
+        "Environment": {
+          "Variables": {
+            "COGNITO_TOKEN_URL": {
+              "Ref": "CognitoTokenUrl"
+            },
+            "TOKEN_SCOPE": {
+              "Ref": "TokenScope"
+            }
+          }
+        },
+        "Code": {
+          "S3Bucket": {
+            "Ref": "CodeBucket"
+          },
+          "S3Key": {
+            "Fn::Sub": "${GenerateTokenApplicationName}/lambdas/generate-token/generate-token-${GenerateTokenVersion}.zip"
+          }
+        }
+      }
+    },
+    "GenerateTokenLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/bede-generate-token-${Environment}"
+        },
+        "RetentionInDays": {
+          "Ref": "LogRetentionDays"
+        }
+      }
+    },
+    "TransactionHistoryRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": {
+          "Fn::Sub": "bede-transaction-history-${Environment}-role"
+        },
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+        ],
+        "Policies": [
+          {
+            "PolicyName": {
+              "Fn::Sub": "bede-transaction-history-${Environment}-policy"
+            },
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Sid": "ReadTokenPasswordSecret",
+                  "Effect": "Allow",
+                  "Action": "secretsmanager:GetSecretValue",
+                  "Resource": {
+                    "Fn::Sub": "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${TokenPasswordSecretName}-*"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "TransactionHistoryFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "bede-transaction-history-${Environment}"
+        },
+        "Runtime": "python3.12",
+        "Handler": "index.lambda_handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "TransactionHistoryRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 60,
+        "MemorySize": 256,
+        "VpcConfig": {
+          "SubnetIds": {
+            "Ref": "LambdaSubnetIds"
+          },
+          "SecurityGroupIds": {
+            "Ref": "LambdaSecurityGroupIds"
+          }
+        },
+        "Environment": {
+          "Variables": {
+            "TOKEN_ENDPOINT_URL": {
+              "Ref": "TokenEndpointUrl"
+            },
+            "HISTORY_ENDPOINT_URL": {
+              "Ref": "HistoryEndpointUrl"
+            },
+            "COMPANY_CR": {
+              "Ref": "CompanyCr"
+            },
+            "TOKEN_EMAIL": {
+              "Ref": "TokenEmail"
+            },
+            "TOKEN_PASSWORD_SECRET_NAME": {
+              "Ref": "TokenPasswordSecretName"
+            },
+            "SKIP_TLS_VERIFICATION": {
+              "Ref": "SkipTlsVerification"
+            }
+          }
+        },
+        "Code": {
+          "S3Bucket": {
+            "Ref": "CodeBucket"
+          },
+          "S3Key": {
+            "Fn::Sub": "${TransactionHistoryApplicationName}/lambdas/transaction-history/transaction-history-${TransactionHistoryVersion}.zip"
+          }
+        }
+      }
+    },
+    "TransactionHistoryLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/bede-transaction-history-${Environment}"
+        },
+        "RetentionInDays": {
+          "Ref": "LogRetentionDays"
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "GenerateTokenFunctionArn": {
+      "Description": "Pass to the API Gateway stack",
+      "Value": {
+        "Fn::GetAtt": [
+          "GenerateTokenFunction",
+          "Arn"
+        ]
+      }
+    },
+    "TransactionHistoryFunctionArn": {
+      "Description": "Pass to the API Gateway stack",
+      "Value": {
+        "Fn::GetAtt": [
+          "TransactionHistoryFunction",
+          "Arn"
+        ]
+      }
+    }
+  }
+}
