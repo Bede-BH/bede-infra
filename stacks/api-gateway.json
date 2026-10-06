@@ -22,9 +22,14 @@
       "Type": "String",
       "Description": "From the Cognito stack outputs, in the bede-identity account"
     },
-    "RequiredScope": {
+    "AllowedClientIds": {
+      "Type": "CommaDelimitedList",
+      "Description": "Cognito app client IDs permitted to call this API, comma separated. API Gateway requires at least one audience. Cognito client_credentials tokens carry the client ID in the client_id claim, which API Gateway matches against this list. Every new consumer must be added here as well as to the Cognito stack."
+    },
+    "TransactionHistoryScope": {
       "Type": "String",
-      "Default": "accounts/read"
+      "Default": "accounts/transaction-history",
+      "Description": "Scope required to call the transaction history route. Each API gets its own scope, so a client granted only other scopes cannot call this one."
     },
     "ThrottleRateLimit": {
       "Type": "Number",
@@ -83,6 +88,9 @@
           "$request.header.Authorization"
         ],
         "JwtConfiguration": {
+          "Audience": {
+            "Ref": "AllowedClientIds"
+          },
           "Issuer": {
             "Ref": "JwtIssuerUrl"
           }
@@ -143,7 +151,7 @@
         },
         "AuthorizationScopes": [
           {
-            "Ref": "RequiredScope"
+            "Ref": "TransactionHistoryScope"
           }
         ],
         "Target": {

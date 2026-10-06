@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Bede API identity - Cognito user pool for machine-to-machine API access. Deployed in the bede-identity account, once per environment. App clients are declared in this template so that the list of who has API access is reviewable in git; adding a consumer is a pull request and a stack update, not a console action.",
+  "Description": "Bede API identity - Cognito user pool for machine-to-machine API access. Deployed in the bede-identity account, once per environment. App clients and the scopes they are granted are declared here, so the list of who may call which API is reviewable in git.",
   "Parameters": {
     "Environment": {
       "Type": "String",
@@ -54,8 +54,8 @@
         "Name": "accounts",
         "Scopes": [
           {
-            "ScopeName": "read",
-            "ScopeDescription": "Read account transaction history"
+            "ScopeName": "transaction-history",
+            "ScopeDescription": "Call the account transaction history API"
           }
         ]
       }
@@ -76,7 +76,7 @@
         ],
         "AllowedOAuthFlowsUserPoolClient": true,
         "AllowedOAuthScopes": [
-          "accounts/read"
+          "accounts/transaction-history"
         ],
         "SupportedIdentityProviders": [
           "COGNITO"
@@ -109,12 +109,17 @@
         "Fn::Sub": "https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com/oauth2/token"
       }
     },
-    "TokenScope": {
-      "Description": "Pass to the Lambda stack as TokenScope",
-      "Value": "accounts/read"
+    "TransactionHistoryScope": {
+      "Description": "Pass to the API Gateway stack",
+      "Value": "accounts/transaction-history"
+    },
+    "AllowedClientIds": {
+      "Description": "Pass to the API Gateway stack as AllowedClientIds. Append each new consumer's client ID, comma separated.",
+      "Value": {
+        "Ref": "ConsumerBusinessReporting"
+      }
     },
     "BusinessReportingClientId": {
-      "Description": "Give this to the consumer, with its secret",
       "Value": {
         "Ref": "ConsumerBusinessReporting"
       }

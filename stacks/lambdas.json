@@ -20,7 +20,7 @@
     },
     "GenerateTokenVersion": {
       "Type": "String",
-      "Default": "v1.0",
+      "Default": "v1.1",
       "Description": "Bump on every code change - CloudFormation only redeploys when the S3 key changes."
     },
     "TransactionHistoryApplicationName": {
@@ -37,7 +37,8 @@
     },
     "TokenScope": {
       "Type": "String",
-      "Default": "accounts/read"
+      "Default": "",
+      "Description": "Optional default scope for token requests. Leave blank so Cognito issues every scope the client is entitled to; a caller may still request a subset via the scope field in the request body."
     },
     "CompanyCr": {
       "Type": "String",
@@ -125,7 +126,7 @@
             "COGNITO_TOKEN_URL": {
               "Ref": "CognitoTokenUrl"
             },
-            "TOKEN_SCOPE": {
+            "DEFAULT_TOKEN_SCOPE": {
               "Ref": "TokenScope"
             }
           }
