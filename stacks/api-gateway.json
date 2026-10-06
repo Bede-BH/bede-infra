@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Bede API gateway - routes /auth/generate-token and /account/transaction-history. Deployed in each application account (dev, uat, prod).",
+  "Description": "Bede API gateway - routes /integration/auth/generate-token and /integration/accounts/transaction-history. Deployed in each application account (dev, uat, prod).",
   "Parameters": {
     "Environment": {
       "Type": "String",
@@ -109,7 +109,7 @@
         "ApiId": {
           "Ref": "HttpApi"
         },
-        "RouteKey": "POST /auth/generate-token",
+        "RouteKey": "POST /integration/auth/generate-token",
         "AuthorizationType": "NONE",
         "Target": {
           "Fn::Sub": "integrations/${GenerateTokenIntegration}"
@@ -136,7 +136,7 @@
         "ApiId": {
           "Ref": "HttpApi"
         },
-        "RouteKey": "POST /account/transaction-history",
+        "RouteKey": "POST /integration/accounts/transaction-history",
         "AuthorizationType": "JWT",
         "AuthorizerId": {
           "Ref": "JwtAuthorizer"
@@ -168,7 +168,7 @@
           }
         },
         "RouteSettings": {
-          "POST /auth/generate-token": {
+          "POST /integration/auth/generate-token": {
             "ThrottlingRateLimit": {
               "Ref": "TokenRouteRateLimit"
             },
@@ -197,7 +197,7 @@
         "Action": "lambda:InvokeFunction",
         "Principal": "apigateway.amazonaws.com",
         "SourceArn": {
-          "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*/auth/generate-token"
+          "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*/integration/auth/generate-token"
         }
       }
     },
@@ -210,7 +210,7 @@
         "Action": "lambda:InvokeFunction",
         "Principal": "apigateway.amazonaws.com",
         "SourceArn": {
-          "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*/account/transaction-history"
+          "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*/integration/accounts/transaction-history"
         }
       }
     }
@@ -223,12 +223,12 @@
     },
     "GenerateTokenUrl": {
       "Value": {
-        "Fn::Sub": "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/auth/generate-token"
+        "Fn::Sub": "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/integration/auth/generate-token"
       }
     },
     "TransactionHistoryUrl": {
       "Value": {
-        "Fn::Sub": "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/account/transaction-history"
+        "Fn::Sub": "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/integration/accounts/transaction-history"
       }
     }
   }
