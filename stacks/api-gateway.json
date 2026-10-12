@@ -10,6 +10,18 @@
         "prod"
       ]
     },
+    "CustomDomainName": {
+      "Type": "String",
+      "Description": "Hostname this API is served on, e.g. api.dev.bede.bh. Must match a name covered by the certificate."
+    },
+    "CertificateArn": {
+      "Type": "String",
+      "Description": "ACM certificate ARN for CustomDomainName. Must be ISSUED and in the same region as this stack."
+    },
+    "HostedZoneName": {
+      "Type": "String",
+      "Description": "Route 53 public hosted zone the record is created in, with a trailing dot, e.g. dev.bede.bh."
+    },
     "GenerateTokenFunctionArn": {
       "Type": "String",
       "Description": "From the Lambda stack outputs"
@@ -221,22 +233,86 @@
           "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*/integration/accounts/transaction-history"
         }
       }
+    },
+    "ApiDomainName": {
+      "Type": "AWS::ApiGatewayV2::DomainName",
+      "Properties": {
+        "DomainName": {
+          "Ref": "CustomDomainName"
+        },
+        "DomainNameConfigurations": [
+          {
+            "CertificateArn": {
+              "Ref": "CertificateArn"
+            },
+            "EndpointType": "REGIONAL",
+            "SecurityPolicy": "TLS_1_2"
+          }
+        ]
+      }
+    },
+    "ApiMapping": {
+      "Type": "AWS::ApiGatewayV2::ApiMapping",
+      "DependsOn": "Stage",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HttpApi"
+        },
+        "DomainName": {
+          "Ref": "ApiDomainName"
+        },
+        "Stage": "$default"
+      }
+    },
+    "ApiDnsRecord": {
+      "Type": "AWS::Route53::RecordSet",
+      "Properties": {
+        "HostedZoneName": {
+          "Ref": "HostedZoneName"
+        },
+        "Name": {
+          "Ref": "CustomDomainName"
+        },
+        "Type": "A",
+        "AliasTarget": {
+          "DNSName": {
+            "Fn::GetAtt": [
+              "ApiDomainName",
+              "RegionalDomainName"
+            ]
+          },
+          "HostedZoneId": {
+            "Fn::GetAtt": [
+              "ApiDomainName",
+              "RegionalHostedZoneId"
+            ]
+          },
+          "EvaluateTargetHealth": false
+        }
+      }
     }
   },
   "Outputs": {
     "ApiBaseUrl": {
+      "Description": "Custom domain base URL",
       "Value": {
-        "Fn::Sub": "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+        "Fn::Sub": "https://${CustomDomainName}"
       }
     },
     "GenerateTokenUrl": {
       "Value": {
-        "Fn::Sub": "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/integration/auth/generate-token"
+        "Fn::Sub": "https://${CustomDomainName}/integration/auth/generate-token"
       }
     },
     "TransactionHistoryUrl": {
       "Value": {
-        "Fn::Sub": "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/integration/accounts/transaction-history"
+        "Fn::Sub": "https://${CustomDomainName}/integration/accounts/transaction-history"
+      }
+    },
+    "DefaultExecuteApiUrl": {
+      "Description": "The default endpoint, still active",
+      "Value": {
+        "Fn::Sub": "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
       }
     }
   }
