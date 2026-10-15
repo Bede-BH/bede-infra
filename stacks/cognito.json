@@ -92,13 +92,22 @@
   },
   "Outputs": {
     "UserPoolId": {
-      "Description": "Pass to the API Gateway stack",
+      "Description": "The pool's ID, for use with the AWS CLI",
       "Value": {
         "Ref": "UserPool"
       }
     },
+    "UserPoolArn": {
+      "Description": "Pass to the API Gateway stack in the application account as UserPoolArn",
+      "Value": {
+        "Fn::GetAtt": [
+          "UserPool",
+          "Arn"
+        ]
+      }
+    },
     "JwtIssuerUrl": {
-      "Description": "Pass to the API Gateway stack as JwtIssuerUrl",
+      "Description": "The pool's issuer URL, for reference. Tokens carry it as their iss claim",
       "Value": {
         "Fn::Sub": "https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}"
       }
@@ -107,16 +116,6 @@
       "Description": "Pass to the Lambda stack as CognitoTokenUrl",
       "Value": {
         "Fn::Sub": "https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com/oauth2/token"
-      }
-    },
-    "TransactionHistoryScope": {
-      "Description": "Pass to the API Gateway stack",
-      "Value": "accounts/transaction-history"
-    },
-    "AllowedClientIds": {
-      "Description": "Pass to the API Gateway stack as AllowedClientIds. Append each new consumer's client ID, comma separated.",
-      "Value": {
-        "Ref": "ConsumerBusinessReporting"
       }
     },
     "BusinessReportingClientId": {
@@ -129,6 +128,10 @@
       "Value": {
         "Fn::Sub": "aws cognito-idp describe-user-pool-client --user-pool-id ${UserPool} --client-id ${ConsumerBusinessReporting} --query UserPoolClient.ClientSecret --output text"
       }
+    },
+    "TransactionHistoryScope": {
+      "Description": "For reference: the scope the transaction history route requires",
+      "Value": "accounts/transaction-history"
     }
   }
 }

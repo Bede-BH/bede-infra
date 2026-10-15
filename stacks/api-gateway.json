@@ -1,6 +1,6 @@
 {
   "AWSTemplateFormatVersion": "2010-09-09",
-  "Description": "Bede API gateway - routes /integration/auth/generate-token and /integration/accounts/transaction-history. Deployed in each application account (dev, uat, prod).",
+  "Description": "Bede API gateway (REST API) - routes /integration/auth/generate-token and /integration/accounts/transaction-history. Protected routes are authorised by this environment's Cognito user pool, in bede-identity, using API Gateway's native Cognito authorizer. Deployed in each application account (dev, uat, prod).",
   "Parameters": {
     "Environment": {
       "Type": "String",
@@ -12,7 +12,7 @@
     },
     "CustomDomainName": {
       "Type": "String",
-      "Description": "Hostname this API is served on, e.g. api.dev.bede.bh. Must match a name covered by the certificate."
+      "Description": "Hostname this API is served on, e.g. api.dev.bede.bh. Must be covered by the certificate."
     },
     "CertificateArn": {
       "Type": "String",
@@ -20,7 +20,7 @@
     },
     "HostedZoneName": {
       "Type": "String",
-      "Description": "Route 53 public hosted zone the record is created in, with a trailing dot, e.g. dev.bede.bh."
+      "Description": "Public Route 53 hosted zone the record is created in, WITH a trailing dot, e.g. dev.bede.bh."
     },
     "GenerateTokenFunctionArn": {
       "Type": "String",
@@ -30,18 +30,11 @@
       "Type": "String",
       "Description": "From the Lambda stack outputs"
     },
-    "JwtIssuerUrl": {
+    "UserPoolArn": {
       "Type": "String",
-      "Description": "From the Cognito stack outputs, in the bede-identity account"
-    },
-    "AllowedClientIds": {
-      "Type": "CommaDelimitedList",
-      "Description": "Cognito app client IDs permitted to call this API, comma separated. API Gateway requires at least one audience. Cognito client_credentials tokens carry the client ID in the client_id claim, which API Gateway matches against this list. Every new consumer must be added here as well as to the Cognito stack."
-    },
-    "TransactionHistoryScope": {
-      "Type": "String",
-      "Default": "accounts/transaction-history",
-      "Description": "Scope required to call the transaction history route. Each API gets its own scope, so a client granted only other scopes cannot call this one."
+      "AllowedPattern": "^arn:aws:cognito-idp:[a-z0-9-]+:[0-9]{12}:userpool/[A-Za-z0-9_-]+$",
+      "ConstraintDescription": "A Cognito user pool ARN, e.g. arn:aws:cognito-idp:eu-west-1:123456789012:userpool/eu-west-1_AbCdEf",
+      "Description": "ARN of THIS environment's Cognito user pool, in bede-identity (a cross-account ARN). From the Cognito stack's UserPoolArn output. Each environment must use its own pool, so that a dev token is rejected by prod."
     },
     "ThrottleRateLimit": {
       "Type": "Number",
@@ -55,15 +48,34 @@
     "TokenRouteRateLimit": {
       "Type": "Number",
       "Default": 2,
-      "Description": "The token route is unauthenticated, so it is throttled harder than the rest"
+      "Description": "The token route is unauthenticated, so it is throttled harder"
     },
     "TokenRouteBurstLimit": {
       "Type": "Number",
       "Default": 5
     },
+    "EnableAccessLogging": {
+      "Type": "String",
+      "Default": "true",
+      "AllowedValues": [
+        "true",
+        "false"
+      ],
+      "Description": "REST API access logging requires a CloudWatch Logs role to be set once per account and region (API Gateway > Settings). If it is not set, creating the stage fails; set it, or deploy with false."
+    },
     "LogRetentionDays": {
       "Type": "Number",
       "Default": 90
+    }
+  },
+  "Conditions": {
+    "LoggingEnabled": {
+      "Fn::Equals": [
+        {
+          "Ref": "EnableAccessLogging"
+        },
+        "true"
+      ]
     }
   },
   "Resources": {
@@ -78,117 +90,187 @@
         }
       }
     },
-    "HttpApi": {
-      "Type": "AWS::ApiGatewayV2::Api",
+    "RestApi": {
+      "Type": "AWS::ApiGateway::RestApi",
       "Properties": {
         "Name": {
           "Fn::Sub": "bede-api-${Environment}"
         },
-        "ProtocolType": "HTTP",
-        "Description": "Bede partner API"
+        "Description": "Bede partner API",
+        "EndpointConfiguration": {
+          "Types": [
+            "REGIONAL"
+          ]
+        }
       }
     },
-    "JwtAuthorizer": {
-      "Type": "AWS::ApiGatewayV2::Authorizer",
+    "IntegrationResource": {
+      "Type": "AWS::ApiGateway::Resource",
       "Properties": {
-        "ApiId": {
-          "Ref": "HttpApi"
+        "RestApiId": {
+          "Ref": "RestApi"
         },
-        "AuthorizerType": "JWT",
-        "Name": "cognito-jwt",
-        "IdentitySource": [
-          "$request.header.Authorization"
-        ],
-        "JwtConfiguration": {
-          "Audience": {
-            "Ref": "AllowedClientIds"
-          },
-          "Issuer": {
-            "Ref": "JwtIssuerUrl"
+        "ParentId": {
+          "Fn::GetAtt": [
+            "RestApi",
+            "RootResourceId"
+          ]
+        },
+        "PathPart": "integration"
+      }
+    },
+    "AuthResource": {
+      "Type": "AWS::ApiGateway::Resource",
+      "Properties": {
+        "RestApiId": {
+          "Ref": "RestApi"
+        },
+        "ParentId": {
+          "Ref": "IntegrationResource"
+        },
+        "PathPart": "auth"
+      }
+    },
+    "GenerateTokenResource": {
+      "Type": "AWS::ApiGateway::Resource",
+      "Properties": {
+        "RestApiId": {
+          "Ref": "RestApi"
+        },
+        "ParentId": {
+          "Ref": "AuthResource"
+        },
+        "PathPart": "generate-token"
+      }
+    },
+    "AccountsResource": {
+      "Type": "AWS::ApiGateway::Resource",
+      "Properties": {
+        "RestApiId": {
+          "Ref": "RestApi"
+        },
+        "ParentId": {
+          "Ref": "IntegrationResource"
+        },
+        "PathPart": "accounts"
+      }
+    },
+    "TransactionHistoryResource": {
+      "Type": "AWS::ApiGateway::Resource",
+      "Properties": {
+        "RestApiId": {
+          "Ref": "RestApi"
+        },
+        "ParentId": {
+          "Ref": "AccountsResource"
+        },
+        "PathPart": "transaction-history"
+      }
+    },
+    "ApiAuthorizer": {
+      "Type": "AWS::ApiGateway::Authorizer",
+      "Properties": {
+        "RestApiId": {
+          "Ref": "RestApi"
+        },
+        "Name": "bede-cognito-pool",
+        "Type": "COGNITO_USER_POOLS",
+        "IdentitySource": "method.request.header.Authorization",
+        "ProviderARNs": [
+          {
+            "Ref": "UserPoolArn"
           }
-        }
+        ]
       }
     },
-    "GenerateTokenIntegration": {
-      "Type": "AWS::ApiGatewayV2::Integration",
+    "GenerateTokenMethod": {
+      "Type": "AWS::ApiGateway::Method",
       "Properties": {
-        "ApiId": {
-          "Ref": "HttpApi"
+        "RestApiId": {
+          "Ref": "RestApi"
         },
-        "IntegrationType": "AWS_PROXY",
-        "IntegrationUri": {
-          "Ref": "GenerateTokenFunctionArn"
+        "ResourceId": {
+          "Ref": "GenerateTokenResource"
         },
-        "PayloadFormatVersion": "2.0",
-        "TimeoutInMillis": 15000
-      }
-    },
-    "GenerateTokenRoute": {
-      "Type": "AWS::ApiGatewayV2::Route",
-      "Properties": {
-        "ApiId": {
-          "Ref": "HttpApi"
-        },
-        "RouteKey": "POST /integration/auth/generate-token",
+        "HttpMethod": "POST",
         "AuthorizationType": "NONE",
-        "Target": {
-          "Fn::Sub": "integrations/${GenerateTokenIntegration}"
+        "Integration": {
+          "Type": "AWS_PROXY",
+          "IntegrationHttpMethod": "POST",
+          "Uri": {
+            "Fn::Sub": "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GenerateTokenFunctionArn}/invocations"
+          },
+          "TimeoutInMillis": 15000
         }
       }
     },
-    "TransactionHistoryIntegration": {
-      "Type": "AWS::ApiGatewayV2::Integration",
+    "TransactionHistoryMethod": {
+      "Type": "AWS::ApiGateway::Method",
+      "Metadata": {
+        "Note": "The scope below must equal the Cognito resource server's Identifier/ScopeName and be granted in each client's AllowedOAuthScopes. It is deliberately NOT a parameter: a Deployment is immutable, so changing a method has no live effect until the Deployment is renamed, and a parameter change cannot rename it."
+      },
       "Properties": {
-        "ApiId": {
-          "Ref": "HttpApi"
+        "RestApiId": {
+          "Ref": "RestApi"
         },
-        "IntegrationType": "AWS_PROXY",
-        "IntegrationUri": {
-          "Ref": "TransactionHistoryFunctionArn"
+        "ResourceId": {
+          "Ref": "TransactionHistoryResource"
         },
-        "PayloadFormatVersion": "2.0",
-        "TimeoutInMillis": 29000
-      }
-    },
-    "TransactionHistoryRoute": {
-      "Type": "AWS::ApiGatewayV2::Route",
-      "Properties": {
-        "ApiId": {
-          "Ref": "HttpApi"
-        },
-        "RouteKey": "POST /integration/accounts/transaction-history",
-        "AuthorizationType": "JWT",
+        "HttpMethod": "POST",
+        "AuthorizationType": "COGNITO_USER_POOLS",
         "AuthorizerId": {
-          "Ref": "JwtAuthorizer"
+          "Ref": "ApiAuthorizer"
         },
         "AuthorizationScopes": [
-          {
-            "Ref": "TransactionHistoryScope"
-          }
+          "accounts/transaction-history"
         ],
-        "Target": {
-          "Fn::Sub": "integrations/${TransactionHistoryIntegration}"
+        "Integration": {
+          "Type": "AWS_PROXY",
+          "IntegrationHttpMethod": "POST",
+          "Uri": {
+            "Fn::Sub": "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TransactionHistoryFunctionArn}/invocations"
+          },
+          "TimeoutInMillis": 29000
         }
+      }
+    },
+    "DeploymentV1": {
+      "Type": "AWS::ApiGateway::Deployment",
+      "DependsOn": [
+        "GenerateTokenMethod",
+        "TransactionHistoryMethod"
+      ],
+      "Properties": {
+        "RestApiId": {
+          "Ref": "RestApi"
+        },
+        "Description": "v1"
       }
     },
     "Stage": {
-      "Type": "AWS::ApiGatewayV2::Stage",
+      "Type": "AWS::ApiGateway::Stage",
       "Properties": {
-        "ApiId": {
-          "Ref": "HttpApi"
+        "RestApiId": {
+          "Ref": "RestApi"
         },
-        "StageName": "$default",
-        "AutoDeploy": true,
-        "DefaultRouteSettings": {
-          "ThrottlingRateLimit": {
-            "Ref": "ThrottleRateLimit"
+        "DeploymentId": {
+          "Ref": "DeploymentV1"
+        },
+        "StageName": "live",
+        "MethodSettings": [
+          {
+            "ResourcePath": "/*",
+            "HttpMethod": "*",
+            "ThrottlingRateLimit": {
+              "Ref": "ThrottleRateLimit"
+            },
+            "ThrottlingBurstLimit": {
+              "Ref": "ThrottleBurstLimit"
+            }
           },
-          "ThrottlingBurstLimit": {
-            "Ref": "ThrottleBurstLimit"
-          }
-        },
-        "RouteSettings": {
-          "POST /integration/auth/generate-token": {
+          {
+            "ResourcePath": "/~1integration~1auth~1generate-token",
+            "HttpMethod": "POST",
             "ThrottlingRateLimit": {
               "Ref": "TokenRouteRateLimit"
             },
@@ -196,15 +278,23 @@
               "Ref": "TokenRouteBurstLimit"
             }
           }
-        },
-        "AccessLogSettings": {
-          "DestinationArn": {
-            "Fn::GetAtt": [
-              "ApiLogGroup",
-              "Arn"
-            ]
-          },
-          "Format": "{\"requestId\": \"$context.requestId\", \"ip\": \"$context.identity.sourceIp\", \"requestTime\": \"$context.requestTime\", \"routeKey\": \"$context.routeKey\", \"status\": \"$context.status\", \"clientId\": \"$context.authorizer.claims.client_id\", \"integrationError\": \"$context.integrationErrorMessage\"}"
+        ],
+        "AccessLogSetting": {
+          "Fn::If": [
+            "LoggingEnabled",
+            {
+              "DestinationArn": {
+                "Fn::GetAtt": [
+                  "ApiLogGroup",
+                  "Arn"
+                ]
+              },
+              "Format": "{\"requestId\": \"$context.requestId\", \"ip\": \"$context.identity.sourceIp\", \"requestTime\": \"$context.requestTime\", \"httpMethod\": \"$context.httpMethod\", \"path\": \"$context.path\", \"status\": \"$context.status\", \"clientId\": \"$context.authorizer.claims.client_id\", \"integrationError\": \"$context.integrationErrorMessage\", \"responseLatency\": \"$context.responseLatency\"}"
+            },
+            {
+              "Ref": "AWS::NoValue"
+            }
+          ]
         }
       }
     },
@@ -217,7 +307,7 @@
         "Action": "lambda:InvokeFunction",
         "Principal": "apigateway.amazonaws.com",
         "SourceArn": {
-          "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*/integration/auth/generate-token"
+          "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApi}/*/POST/integration/auth/generate-token"
         }
       }
     },
@@ -230,38 +320,39 @@
         "Action": "lambda:InvokeFunction",
         "Principal": "apigateway.amazonaws.com",
         "SourceArn": {
-          "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*/integration/accounts/transaction-history"
+          "Fn::Sub": "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RestApi}/*/POST/integration/accounts/transaction-history"
         }
       }
     },
     "ApiDomainName": {
-      "Type": "AWS::ApiGatewayV2::DomainName",
+      "Type": "AWS::ApiGateway::DomainName",
       "Properties": {
         "DomainName": {
           "Ref": "CustomDomainName"
         },
-        "DomainNameConfigurations": [
-          {
-            "CertificateArn": {
-              "Ref": "CertificateArn"
-            },
-            "EndpointType": "REGIONAL",
-            "SecurityPolicy": "TLS_1_2"
-          }
-        ]
+        "RegionalCertificateArn": {
+          "Ref": "CertificateArn"
+        },
+        "EndpointConfiguration": {
+          "Types": [
+            "REGIONAL"
+          ]
+        },
+        "SecurityPolicy": "TLS_1_2"
       }
     },
-    "ApiMapping": {
-      "Type": "AWS::ApiGatewayV2::ApiMapping",
-      "DependsOn": "Stage",
+    "ApiBasePathMapping": {
+      "Type": "AWS::ApiGateway::BasePathMapping",
       "Properties": {
-        "ApiId": {
-          "Ref": "HttpApi"
-        },
         "DomainName": {
           "Ref": "ApiDomainName"
         },
-        "Stage": "$default"
+        "RestApiId": {
+          "Ref": "RestApi"
+        },
+        "Stage": {
+          "Ref": "Stage"
+        }
       }
     },
     "ApiDnsRecord": {
@@ -310,9 +401,9 @@
       }
     },
     "DefaultExecuteApiUrl": {
-      "Description": "The default endpoint, still active",
+      "Description": "The generated endpoint. Note the stage name in the path, unlike the custom domain.",
       "Value": {
-        "Fn::Sub": "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+        "Fn::Sub": "https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/live"
       }
     }
   }
